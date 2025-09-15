@@ -1,14 +1,16 @@
 package com.fix.benchmark.test;
 
-import com.fix.benchmark.engine.EnhancedMultiSessionApplication;
 import com.fix.benchmark.engine.MultiSessionEngineManager;
+import com.fix.benchmark.engine.MultiSessionEngineManager.SessionInstance;
 import com.fix.benchmark.metrics.PreciseRequestTracker;
 import com.fix.benchmark.metrics.PreciseRequestTracker.StatsSnapshot;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.List;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.stream.Collectors;
 
 public class EnhancedLoadTester {
     private static final Logger logger = LoggerFactory.getLogger(EnhancedLoadTester.class);
@@ -81,15 +83,36 @@ public class EnhancedLoadTester {
             return;
         }
         
-        EnhancedMultiSessionApplication app = engineManager.getApplication(sessionId);
-        if (app != null && app.isConnected()) {
-            app.sendTestRequest();
+        SessionInstance session = engineManager.getSession(sessionId);
+        if (session != null && session.isConnected()) {
+            String testReqId = generateTestReqId(sessionId);
+            session.sendTestRequest(testReqId);
+            
+            // 记录请求开始时间
+            requestTracker.recordRequestStart(testReqId, System.nanoTime());
+            logger.debug("Sent test request {} via session {}", testReqId, sessionId);
         }
     }
     
     private String selectActiveSession() {
-        // 简化实现，实际应该从engineManager获取活跃会话
-        return "BENCHMARK_CLIENT_0001"; // 示例
+        // 获取所有活跃会话
+        List<String> activeSessions = engineManager.getSessions().entrySet().stream()
+                .filter(entry -> entry.getValue().isConnected())
+                .map(Map.Entry::getKey)
+                .collect(Collectors.toList());
+        
+        if (activeSessions.isEmpty()) {
+            logger.warn("No active sessions available for testing");
+            return null;
+        }
+        
+        // 随机选择一个活跃会话
+        int index = ThreadLocalRandom.current().nextInt(activeSessions.size());
+        return activeSessions.get(index);
+    }
+    
+    private String generateTestReqId(String sessionId) {
+        return "BENCH-" + sessionId + "-" + System.nanoTime() + "-" + Thread.currentThread().getId();
     }
     
     private void checkTimeouts() {
@@ -147,7 +170,7 @@ public class EnhancedLoadTester {
             if (!testExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
                 testExecutor.shutdownNow();
             }
-            if (!scheduler.awaitTermination(5, Time TimeUnit.SECONDS)) {
+            if (!scheduler.awaitTermination(5, TimeUnit.SECONDS)) {
                 scheduler.shutdownNow();
             }
         } catch (InterruptedException e) {

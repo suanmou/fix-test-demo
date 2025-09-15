@@ -10,6 +10,7 @@ import quickfix.fix44.Heartbeat;
 import quickfix.fix44.TestRequest;
 
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class EnhancedMultiSessionApplication extends MessageCracker implements Application {
     private static final Logger logger = LoggerFactory.getLogger(EnhancedMultiSessionApplication.class);
@@ -20,6 +21,7 @@ public class EnhancedMultiSessionApplication extends MessageCracker implements A
     
     // 会话级别的统计
     private final ConcurrentHashMap<String, Long> pendingRequests = new ConcurrentHashMap<>();
+    private SessionID targetSessionId;
     
     public EnhancedMultiSessionApplication(String sessionId, PreciseRequestTracker requestTracker) {
         this.sessionId = sessionId;
@@ -29,6 +31,10 @@ public class EnhancedMultiSessionApplication extends MessageCracker implements A
     @Override
     public void onCreate(SessionID sessionId) {
         logger.debug("Session {} created: {}", this.sessionId, sessionId);
+        // 保存会话ID用于后续使用
+        if (sessionId.toString().contains(this.sessionId)) {
+            this.targetSessionId = sessionId;
+        }
     }
     
     @Override
@@ -72,15 +78,16 @@ public class EnhancedMultiSessionApplication extends MessageCracker implements A
     
     @Override
     public void fromApp(Message message, SessionID sessionId) throws FieldNotFound, IncorrectDataFormat, IncorrectTagValue, UnsupportedMessageType {
+        // 使用MessageCracker来处理消息
         crack(message, sessionId);
     }
     
+    // 使用MessageCracker的onMessage方法来处理TestRequest响应
     @Override
-    public void onMessage(Heartbeat heartbeat, SessionID sessionID) throws FieldNotFound, UnsupportedMessageType, IncorrectTagValue {
-        // 检查是否是TestRequest的响应
+    public void onMessage(TestRequest testRequest, SessionID sessionID) throws FieldNotFound, UnsupportedMessageType, IncorrectTagValue {
         TestReqID testReqID = new TestReqID();
-        if (heartbeat.isSetField(testReqID)) {
-            heartbeat.get(testReqID);
+        if (testRequest.isSetField(testReqID)) {
+            testRequest.get(testReqID);
             String testReqId = testReqID.getValue();
             
             Long sendTime = pendingRequests.remove(testReqId);
@@ -89,6 +96,12 @@ public class EnhancedMultiSessionApplication extends MessageCracker implements A
                 requestTracker.recordResponse(testReqId, receiveTime);
             }
         }
+    }
+    
+    // 处理心跳消息 - 注意：Heartbeat通常不会包含TestReqID
+    public void onMessage(Heartbeat heartbeat, SessionID sessionID) throws FieldNotFound, UnsupportedMessageType, IncorrectTagValue {
+        // Heartbeat消息通常不包含TestReqID，所以我们不需要在这里处理响应
+        // 响应处理应该在TestRequest的onMessage中处理
     }
     
     public boolean sendTestRequest() {
@@ -113,12 +126,15 @@ public class EnhancedMultiSessionApplication extends MessageCracker implements A
     }
     
     private SessionID getSessionID() {
-        for (SessionID sessionID : Session.getSessions()) {
-            Session session = Session.lookupSession(sessionID);
+        // 直接使用存储的targetSessionId
+        if (targetSessionId != null) {
+            Session session = Session.lookupSession(targetSessionId);
             if (session != null && session.isLoggedOn()) {
-                return sessionID;
+                return targetSessionId;
             }
         }
+        
+        // 如果没有存储的会话ID，返回null
         return null;
     }
     
